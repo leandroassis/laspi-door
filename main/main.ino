@@ -84,8 +84,7 @@ void loop() {
   String strID = "";                      // Variável para guardar o uid lido
 
   EthernetClient client = server.available();
-  ClientAdmin(client);
-  Serial.println("Server inicializado");
+  ClientAdmin(client); 
   
   /*
   if(!rfid.PCD_PerformSelfTest()){
@@ -129,6 +128,7 @@ void ClientAdmin(EthernetClient client){
     Serial.println("Client web OK");
     while(client.connected() && client.available()){
       char c = client.read();
+      Serial.println(c);
       if (readString.length() < 100) readString += c;  
       if (c == '\n') {
         if(readString.indexOf("Nome=")){
