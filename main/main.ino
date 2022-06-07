@@ -2,7 +2,7 @@
 #include <MFRC522.h>
 #include <Ethernet.h>
 #include <EEPROM.h>
-#include <WebSocketsServer.h>
+//#include <WebSocketsServer.h>
  
 #define RFID_SS_PIN      7          // Chip Enable do sensor rfid    
 #define ETHERNET_SS_PIN  10         // Chip enable do módulo ethernet
@@ -18,7 +18,7 @@
 #define TAG_COUNT 50            // Quantidade de cartões a serem implementados(MAX: 230)
  
 MFRC522 rfid(RFID_SS_PIN, RST_PIN);
-WebSocketsServer webSocket = WebSocketsServer(80);
+//WebSocketsServer webSocket = WebSocketsServer(80);
 
 byte mac_address[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
 byte ip_address[] = {192, 168, 1, 15}; // 192.168.88.19
@@ -26,6 +26,7 @@ byte ip_address[] = {192, 168, 1, 15}; // 192.168.88.19
 String tags_temp[TAG_COUNT];
 int free_address;
 
+/*
 void handleWebSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length){
     switch(type){
       case WStype_DISCONNECTED:
@@ -79,6 +80,7 @@ void handleWebSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t l
         break;
     }
 }
+*/
 
 void setup(){
   
@@ -118,8 +120,8 @@ void setup(){
   EEPROMDump();
   Serial.println("Tags dumpadas da memória para o vetor temporário.");
   
-  webSocket.begin();
-  webSocket.onEvent(handleWebSocketEvent);
+  //webSocket.begin();
+  //webSocket.onEvent(handleWebSocketEvent);
   Serial.println("Websocket configurado e conectado com sucesso.");
 
   /*
@@ -133,15 +135,14 @@ void loop() {
   bool RFID_Found = false;                // Variável auxiliar para controle de interface do usuário
   String strID = "";                      // Variável para guardar o uid lido
 
-  /*
   if(!rfid.PCD_PerformSelfTest()){
     // Performa selftest no sensor RFID, caso falhe a porta é mantida aberta
     PermanentStateError();
   }
   
   strID = read_UID();
-  */
-  webSocket.loop();
+ 
+  //webSocket.loop();
 
   for(int i = 0; i < TAG_COUNT; i++){
     if(strID == tags_temp[i]){ // Se a tag estiver no vetor de tags (foi cadastrada previamente) a porta abre
@@ -152,8 +153,8 @@ void loop() {
   }
   if(!RFID_Found) RFID_Rejected();
   
-  //rfid.PICC_HaltA();
-  //rfid.PCD_StopCrypto1();
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
 }
 
 String read_UID(){
