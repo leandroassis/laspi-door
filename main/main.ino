@@ -2,7 +2,7 @@
 #include <MFRC522.h>
 #include <Ethernet.h>
 #include <EEPROM.h>
-#include <WebSocketsClient.h>
+#include <WebSocketsServer.h>
  
 #define RFID_SS_PIN      7          // Chip Enable do sensor rfid    
 #define ETHERNET_SS_PIN  10         // Chip enable do módulo ethernet
@@ -18,31 +18,79 @@
 #define TAG_COUNT 50            // Quantidade de cartões a serem implementados(MAX: 230)
  
 MFRC522 rfid(RFID_SS_PIN, RST_PIN);
-WebSocketsClient webSocket;
+WebSocketsServer webSocket = WebSocketsServer(80);
 
 byte mac_address[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
 byte ip_address[] = {192, 168, 1, 15}; // 192.168.88.19
-byte gateway[] = {192, 168, 1, 254};
-byte subnet[] = {255, 255, 255, 0};
 
 String tags_temp[TAG_COUNT];
 int free_address;
 
+void handleWebSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length){
+    switch(type){
+      case WStype_DISCONNECTED:
+        Serial.println("Server desconectado.");
+        break;
+      case WStype_CONNECTED:
+        Serial.println("Server conectado.");
+        webSocket.sendTXT(num, "Okay!");
+        break;
+      case WStype_TEXT:
+        Serial.println("Recebido: "+String((char *)payload));
+        if(payload == "cadastrar"){
+          // Le UID, cadastrar na eeprom e envia via TXT
+
+          digitalWrite(RED, LOW);
+          digitalWrite(GREEN, LOW);
+          for(int i = 0; i < 10; i++){
+            digitalWrite(BLUE, !digitalRead(BLUE));
+            delay(300);
+          }
+        
+          //String tag = read_UID();
+          String tag = "FF85E2A0";
+          writeTagInEEPROM(tag);
+          EEPROMDump();
+          webSocket.sendTXT(num, tag);
+
+          digitalWrite(BLUE, LOW);
+          digitalWrite(GREEN, HIGH);
+          digitalWrite(RED, LOW);
+          delay(1000);
+          digitalWrite(BLUE, HIGH);
+          digitalWrite(GREEN, LOW);
+          digitalWrite(RED, LOW);
+
+          for(int i = 0; i < TAG_COUNT; i++) Serial.println(tags_temp[i]);
+        }
+        else if(payload == "excluir"){
+          // seta o free_address para 1 e limpa toda a memória eeprom
+          EEPROM.write(0, 1);
+          for(int i = 1; i < 1024; i++) EEPROM.write(i, 0xFF);
+          webSocket.sendTXT(num, "Limpo");
+        }
+        else{
+          // coloca a tag recebida na eeprom
+          writeTagInEEPROM(String((char *) payload));
+          webSocket.sendTXT(num, "Ok");
+        }
+      default:
+        Serial.println(type);
+        break;
+    }
+}
+
 void setup(){
   
-  Serial.begin(9600);           
+  Serial.begin(115200);           
   Serial.println("Inicializando o sistema");
 
   SPI.begin();                 // Inicia a comunicação SPI 
   rfid.PCD_Init();             // Inicia o sensor RFID
-  Ethernet.begin(mac_address, ip_address, gateway, subnet); // Inicia o shield Ethernet
+  Ethernet.begin(mac_address, ip_address); // Inicia o shield Ethernet
 
   Serial.println("Ethernet, sensor RFID, e barramento SPI configurados e setados.");
   delay(1500);
-
-  webSocket.begin("192.168.88.14", 8011);
-  webSocket.onEvent(handleWebSocketEvent);
-  Serial.println("Websocket configurado e conectado com sucesso.");
   
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(KEEP_PIN, OUTPUT);
@@ -69,6 +117,10 @@ void setup(){
 
   EEPROMDump();
   Serial.println("Tags dumpadas da memória para o vetor temporário.");
+  
+  webSocket.begin();
+  webSocket.onEvent(handleWebSocketEvent);
+  Serial.println("Websocket configurado e conectado com sucesso.");
 
   /*
   Linha de código rodada para inicializar pela primeira vez a eeprom do arduino
@@ -80,15 +132,16 @@ void setup(){
 void loop() {
   bool RFID_Found = false;                // Variável auxiliar para controle de interface do usuário
   String strID = "";                      // Variável para guardar o uid lido
-  
+
+  /*
   if(!rfid.PCD_PerformSelfTest()){
     // Performa selftest no sensor RFID, caso falhe a porta é mantida aberta
     PermanentStateError();
   }
   
-  webSocket.loop();
-  
   strID = read_UID();
+  */
+  webSocket.loop();
 
   for(int i = 0; i < TAG_COUNT; i++){
     if(strID == tags_temp[i]){ // Se a tag estiver no vetor de tags (foi cadastrada previamente) a porta abre
@@ -99,8 +152,8 @@ void loop() {
   }
   if(!RFID_Found) RFID_Rejected();
   
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
+  //rfid.PICC_HaltA();
+  //rfid.PCD_StopCrypto1();
 }
 
 String read_UID(){
@@ -114,56 +167,6 @@ String read_UID(){
   uid.toUpperCase();
   
   return uid;
-}
-
-void handleWebSocketEvent(WStype_t type, uint8_t *payload, size_t length){
-    switch(type){
-      case WStype_DISCONNECTED:
-        Serial.println("Server desconectado.");
-        break;
-      case WStype_CONNECTED:
-        Serial.println("Server conectado.");
-        webSocket.sendTXT("Okay!");
-        break;
-      case WStype_TEXT:
-        Serial.println("Recebido: "+String((char *)payload));
-        if(strcmp(payload, "cadastrar")){
-          // Le UID, cadastrar na eeprom e envia via TXT
-
-          digitalWrite(RED, LOW);
-          digitalWrite(GREEN, LOW);
-          for(int i = 0; i < 10; i++){
-            digitalWrite(BLUE, !digitalRead(BLUE));
-            delay(300);
-          }
-        
-          String tag = read_UID();
-          writeTagInEEPROM(tag);
-          EEPROMDump();
-          webSocket.sendTXT(tag);
-
-          digitalWrite(BLUE, LOW);
-          digitalWrite(GREEN, HIGH);
-          digitalWrite(RED, LOW);
-          delay(1000);
-          digitalWrite(BLUE, HIGH);
-          digitalWrite(GREEN, LOW);
-          digitalWrite(RED, LOW);
-
-          for(int i = 0; i < TAG_COUNT; i++) Serial.println(tags_temp[i]);
-        }
-        else if(strcmp(payload, "excluir")){
-          // seta o free_address para 1 e limpa toda a memória eeprom
-          EEPROM.write(0, 1);
-          for(int i = 1; i < 1024; i++) EEPROM.write(i, 0xFF);
-          webSocket.sendTXT("Limpo");
-        }
-        else{
-          // coloca a tag recebida na eeprom
-          writeTagInEEPROM(String((char *) payload));
-          webSocket.sendTXT("Ok");
-        }
-    }
 }
 
 void EEPROMDump(){
