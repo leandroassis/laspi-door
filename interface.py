@@ -1,6 +1,6 @@
 import re
 import PySimpleGUI as sg
-import requests
+import requests, os
 import random as rd
 
 
@@ -35,7 +35,7 @@ while True:
         database = open("database.csv", "a+")
 
         print(f"Cadastrando o usuário: {nome} no Controle de Acesso.")
-        resultado = requests.get("http://192.168.88.19/cadastrar=")
+        resultado = requests.get("http://192.168.88.12/cadastrar=")
         resultado.close()
         
         resultado = resultado.text.split("\r\n")
@@ -56,7 +56,7 @@ while True:
         database = open("database.csv", "w")
         database.write(linhas[0])
         print(f"Deletando o usuário: {nome} do Controle de Acesso")
-        resultado = requests.get("http://192.168.88.19/deletar=")
+        resultado = requests.get("http://192.168.88.12/deletar=")
         resultado.close()
         resultado = resultado.text.split("\r\n")
         
@@ -65,7 +65,7 @@ while True:
             for linha in linhas[1:]:
                 if nome != linha.split(",")[0]:
                     database.write(linha)
-                    resultado = requests.get("http://192.168.88.19/addtag="+linha.split(",")[1][1:])
+                    resultado = requests.get("http://192.168.88.12/addtag="+linha.split(",")[1][1:])
                     resultado.close()
                     resultado = resultado.text.split("\r\n")
                     if "OK" not in resultado:
@@ -77,7 +77,7 @@ while True:
         database = open("database.csv", "r+")
 
         print("Dumpando a EEPROM do microcontrolador.")
-        resultado = requests.get("http://192.168.88.19/atualizarserver=")
+        resultado = requests.get("http://192.168.88.12/atualizarserver=")
         resultado.close()
 
         resultado = resultado.text.split("\r\n")[3:-3]
