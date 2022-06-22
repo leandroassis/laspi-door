@@ -35,7 +35,7 @@ while True:
         database = open("database.csv", "a+")
 
         print(f"Cadastrando o usuário: {nome} no Controle de Acesso.")
-        resultado = requests.get("http://192.168.88.12/cadastrar=")
+        resultado = requests.get("http:	192.168.88.12/cadastrar=")
         resultado.close()
         
         resultado = resultado.text.split("\r\n")

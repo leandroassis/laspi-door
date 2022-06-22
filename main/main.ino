@@ -7,40 +7,41 @@
 #define ETHERNET_SS_PIN  10         // Chip enable do módulo ethernet
 #define RST_PIN     9           // Reset do barramento SPI
 #define RELAY_PIN   5           // Pino de acionar a relé
-#define RELAY2     A0           // Pino de apoio ao acionamento da relé 
+#define RELAY2      2           // Pino de apoio ao acionamento da relé 
 #define INTERRUP    3           // Pino de conexão com o clock do 555
 #define KEEP_PIN    6           // Pino de saída de sinal do arduino para manter circuito de redundância   
 #define RED        A5           // Pino de controle do led de indicação
 #define BLUE       A4           // Pino de controle do led de indicação
 #define GREEN      A3           // Pino de controle do led de indicação
 
-#define TAG_COUNT 30            // Quantidade de cartões a serem implementados(MAX: 35)
+#define TAG_COUNT 45            // Quantidade de cartões a serem implementados(MAX: 35)
  
 MFRC522 rfid(RFID_SS_PIN, RST_PIN);
-EthernetServer server(80);
-
 byte mac_address[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
-byte ip_address[] = {192, 168, 88, 12};
-byte gateway[] = {192, 168, 88, 1};
-byte subnet[] = {255, 255, 255, 0};
+byte server[] = {172, 16, 15, 74};
 
 String tags_temp[TAG_COUNT], readString = String(30);
 int free_address;
 
+void(* resetFunc) (void) = 0;   // Função de reset
+
 void setup(){
-  
-  //Serial.begin(9600);           
+
+  pinMode(ETHERNET_SS_PIN, OUTPUT);
+  pinMode(4,OUTPUT);
+  digitalWrite(ETHERNET_SS_PIN, LOW); 
+  digitalWrite(4, HIGH);
+  Serial.begin(9600);           
   //Serial.println("Inicializando o sistema");
+
+  EEPROMDump();
+  Serial.println("Tags dumpadas da memória para o vetor temporário.");
   
   SPI.begin();                 // Inicia a comunicação SPI 
   rfid.PCD_Init();             // Inicia o sensor RFID
-  Ethernet.begin(mac_address, ip_address, gateway, subnet); // Inicia o shield Ethernet
+  Ethernet.begin(mac_address); // Inicia o shield Ethernet
 
   //Serial.println("Ethernet, sensor RFID, e barramento SPI configurados e setados.");
-  delay(100);
-  
-  server.begin();
-  //Serial.println("Server configurado com sucesso.");
   delay(100);
   
   pinMode(RELAY_PIN, OUTPUT);
@@ -59,16 +60,13 @@ void setup(){
   digitalWrite(GREEN, LOW);
   digitalWrite(A2, LOW);
 
-  digitalWrite(KEEP_PIN, HIGH); // Inicia pulso do arduino em 5V  
-  attachInterrupt(digitalPinToInterrupt(INTERRUP), KeepRelayAlive, CHANGE); // O arduino emite um sinal de "prova de vida" sincronizado ao clock
+  //digitalWrite(KEEP_PIN, HIGH); // Inicia pulso do arduino em 5V  
+  //attachInterrupt(digitalPinToInterrupt(INTERRUP), KeepRelayAlive, CHANGE); // O arduino emite um sinal de "prova de vida" sincronizado ao clock
 
   //Serial.println("Pinos do arduino inicializados com sucesso.");
 
-  digitalWrite(RELAY_PIN, LOW); // Porta trancada
+  //digitalWrite(RELAY_PIN, LOW); // Porta trancada
   digitalWrite(RELAY2, LOW);    // Porta trancada
-  
-  EEPROMDump();
-  //Serial.println("Tags dumpadas da memória para o vetor temporário.");
 }
  
 void loop() {
@@ -77,14 +75,16 @@ void loop() {
 
   if(!rfid.PCD_PerformSelfTest()){
     // Performa selftest no sensor RFID, caso falhe a porta é mantida aberta
+    //Serial.println("Estado de erro");
     PermanentStateError();
   }
-
+    
   ClientHandler();
-  
+
   strID = read_UID();
   if(strID == "") return;
-  //Serial.println(strID);
+  Serial.println(strID);
+  
   
   for(int i = 0; i < TAG_COUNT; i++){
     if(strID == tags_temp[i]){ // Se a tag estiver no vetor de tags (foi cadastrada previamente) a porta abre
@@ -100,19 +100,14 @@ void loop() {
 }
 
 void ClientHandler(){
-  EthernetClient client = server.available();
-  if(client){
-    while(client.connected() && client.available()){
+  EthernetClient client;
+  if(client.connect(server, 80)){
+    client.println("HTTP/1.1 200 OK");
+    while(client.available()){
         char c = client.read();
         if(readString.length() < 100) readString += c;
         if(c == '\n'){
-          //Serial.println(readString);
-          client.println("HTTP/1.1 200 OK");
-          client.println("Content-Type: text/html");
-          client.println("");
-          client.println("<!DOCTYPE HTML>");
-          client.println("<html>");
-          client.println("<body>");
+          Serial.println(readString);
           if(readString.indexOf("cadastrar=") > 0){
             // Le UID, cadastra na eeprom e envia a tag
             //Serial.println("Cadastrar tag");
@@ -131,8 +126,9 @@ void ClientHandler(){
             if(!writeTagInEEPROM(tag)){
               EEPROMDump();
               client.println(tag);
+              client.println("OK");
             }
-            else client.println("FULL OR ALREADY SIGN");
+            else client.println("NOP");
             
             digitalWrite(BLUE, LOW);
             digitalWrite(GREEN, HIGH);
@@ -153,7 +149,7 @@ void ClientHandler(){
               delay(6);
             }
             EEPROMDump();
-            client.println("Limpo");
+            client.println("OK");
             //Serial.println("Memória resetada.");
           }
           else if(readString.indexOf("addtag=") > 0){
@@ -164,23 +160,31 @@ void ClientHandler(){
               EEPROMDump();
               client.println("OK");
             }
-            else client.println("FULL OR ALREADY SIGN");
+            else client.println("NOP");
 
             //for(int i = 0; i < TAG_COUNT; i++) Serial.println(tags_temp[i]);
           }
           else if(readString.indexOf("atualizarserver=") > 0){
-            //Serial.println("Atualizar servidor.");
+            Serial.println("Atualizar servidor.");
             EEPROMDump();
             for(int i = 0; i < TAG_COUNT; i++){
               client.println(tags_temp[i]);
             }
+            client.println("OK");
             //Serial.println("Servidor atualizado.");
           }
           else if(readString.indexOf("desligarsistema=") > 0){
+            Serial.println("Desligar sistema");
+            client.println("OK");
+            client.stop();
             PermanentStateError();
           }
-          client.println("</body>");
-          client.println("</html>");
+          else if(readString.indexOf("resetarsistema=") > 0){
+            Serial.println("Resetando...");
+            client.println("OK");
+            client.stop();
+            resetFunc();
+          }
           readString = "";
           client.stop();
         }
@@ -215,15 +219,15 @@ void EEPROMDump(){
       contador = 0;
       temp.toUpperCase();
       tags_temp[i/4 - 1] = temp;
-      //Serial.print(temp);
-      //Serial.print("  ");
-      //Serial.print(i);
-      //Serial.print("\n");
+      Serial.print(temp);
+      Serial.print("  ");
+      Serial.print(i);
+      Serial.print("\n");
       temp = "";
     }  
   }
-  //Serial.println("--------- Vetor de tags ---------");
-  //for(int i = 0; i < TAG_COUNT; i++) Serial.println(tags_temp[i]);
+  Serial.println("--------- Vetor de tags ---------");
+  for(int i = 0; i < TAG_COUNT; i++) Serial.println(tags_temp[i]);
   //Serial.println("Tags dumpadas com sucesso.");
 }
 
@@ -323,7 +327,9 @@ void PermanentStateError(){
   }  
 }
 
+/*
 void KeepRelayAlive(){
   // Toda vez que o vetor de interrupção for chamado, o valor no pino KEEP é invertido
   digitalWrite(KEEP_PIN, !digitalRead(KEEP_PIN));
 }
+*/
