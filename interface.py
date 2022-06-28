@@ -1,92 +1,120 @@
-import re
-import PySimpleGUI as sg
-import requests, os
-import random as rd
+from art import *
+import PIL.Image
+from os import system
+import platform
+import pandas as pd
 
+def logo_to_ASCII(path):
+    try:
+        img = PIL.Image.open(path)
+        img_flag = True
+    except:
+        print(path, "Unable to find image ");
+    
+    width, height = img.size
+    aspect_ratio = height/width
+    new_width = 40
+    new_height = aspect_ratio * new_width * 0.3
+    img = img.resize((new_width, int(new_height)))
+    
+    img = img.convert('L')
+    
+    chars = ["@", "J", "D", "%", "*", "P", "+", "Y", "$", ",", ".", "^", "-", "+", "="]
+    
+    pixels = img.getdata()
+    new_pixels = [chars[pixel//25] for pixel in pixels]
+    new_pixels = ''.join(new_pixels)
+    new_pixels_count = len(new_pixels)
+    ascii_image = [new_pixels[index:index + new_width] for index in range(0, new_pixels_count, new_width)]
+    ascii_image = "\n".join(ascii_image)
+    
+    return ascii_image
 
-def tagNotIn(tag, linhas):
-    for linha in linhas:
-        if tag == linha.split(",")[1][1:]:
-            return False
-    return True
+class interface():
+    _ARDUINO_ERRO = "NOP"
+    _ARDUINO_SUCESS = "OK"
+    _MAXIMO_TAGS = 45
 
-database = open("database.csv", "r+")
+    def __init__(self):
+        self.apresentacao_inicial()
+        self.tags = pd.read_csv("database.csv")
 
-sg.theme('DarkBlue')
-layout = [  [sg.Text("Nome ou identificação:"), sg.Input(size=(30, 0), key="id")],
-            [sg.Button("Cadastrar"), sg.Button("Deletar"), sg.Button("Dumpar EEPROM")],
-            [sg.Text("Saída de informação;")],
-            [sg.Output(size=(50, 4))],
-            [sg.Text("Tags já cadastradas:")],
-            [sg.Listbox(values=database.readlines(), size=(50, 6))]]
+        while True:
+            self.menu()
 
-database.close()
-window = sg.Window('Portal de Gerenciamento de Acesso', layout)
+    def apresentacao_inicial(self):
+        logo_ASCII = logo_to_ASCII("logo_laspi.jfif")
 
-while True:
-    event, values = window.read()
-    if event == sg.WIN_CLOSED: # if user closes window or clicks cancel
-        break
-
-    nome = values['id'] if len(values['id']) > 0 else "Desconhecido"+str(rd.randint(0, 100001))
-
-    if(event == "Cadastrar"):
-        # Cadastrar
-        database = open("database.csv", "a+")
-
-        print(f"Cadastrando o usuário: {nome} no Controle de Acesso.")
-        resultado = requests.get("http:	192.168.88.12/cadastrar=")
-        resultado.close()
-        
-        resultado = resultado.text.split("\r\n")
-
-        if("FULL OR ALREADY SIGN" not in resultado):
-            database.write(nome+","+resultado[3]+"\n")
-            print(f"Usuário {nome} cadastrado com sucesso.")
+        if platform.system() == 'Linux':
+            system("clear")
         else:
-            print("Erro cadastrando o usuário. Espaço insuficiente na memória ou já cadastrado.")
+            system("cls")
 
-        database.close()
+        print(str("-"*200).center(200))
 
-    elif(event == "Deletar"):
-        database = open("database.csv", "r")
-        linhas = database.readlines()
-        database.close()
+        for linha in logo_ASCII.split('\n'):
+            print(linha.center(210))
 
-        database = open("database.csv", "w")
-        database.write(linhas[0])
-        print(f"Deletando o usuário: {nome} do Controle de Acesso")
-        resultado = requests.get("http://192.168.88.12/deletar=")
-        resultado.close()
-        resultado = resultado.text.split("\r\n")
+        print(text2art('''
+             CERBERUS
+          LASPI - DOOR''', font="univers", ))
+        print("Feito por: assissantosleandro@poli.ufrj.br".rjust(200))
+
+        print(str("-"*200).center(200))
+
+    def menu(self):
+        print('''
+            Menu de Gerenciamento do CERBERUS:
+
+            [C] = Cadastrar novo usuário.
+            [D] = Deletar usuário.
+            [A] = Dumpar tags para o servidor.
+            [E] = Entrar em estado de erro temporário (sai ao reiniciar)
+            [S] = Sair.
+        ''')
+        try:
+            opt = str(input("Escolha uma opção: ")).upper()
+
+            if opt in ["C", "1", "CADASTRAR", "ADD", "NOVO"]:
+                self.cadastrarUsuario()
+            elif opt in ["D", "2", "DELETAR", "REMOVER", "REMOVE"]:
+                self.deletarUsuario()
+            elif opt in ["A", "3", "ATUALIZAR", "DUMPAR"]:
+                self.AtualizarServidor()
+            elif opt in ["S", "4", "SAIR", "QUIT"]:
+                raise KeyboardInterrupt
+            elif opt in ["E", "5", "ENCERRAR", "ERRO", "ERROR"]:
+                self.EntraEstadoErro()
+            else:
+                print("\nOpção inválida. Leia a documentação disponibilizada e tente novamente.")
+                raise KeyboardInterrupt
+
+        except KeyboardInterrupt:
+            print("\nSaindo da aplicação...")
+            exit()
         
-        if("Limpo" in resultado):
-            print("Memória do microcontrolador limpa")
-            for linha in linhas[1:]:
-                if nome != linha.split(",")[0]:
-                    database.write(linha)
-                    resultado = requests.get("http://192.168.88.12/addtag="+linha.split(",")[1][1:])
-                    resultado.close()
-                    resultado = resultado.text.split("\r\n")
-                    if "OK" not in resultado:
-                        print("Tag "+linha.split(',')[1]+" não cadastrada por erro.")
-        database.close()
-        print("Tag deletada com sucesso.")
+    def cadastrarUsuario(self):
+        # Pede um nome pro usuario e avisa para a pessoa ir encostar o cartão
+        # mostrar a tag e o nome inserido e o código de erro
+        # mostra as tags salvas no database e a quantidade máxima de tags possiveis
+        pass
 
-    elif(event == "Dumpar EEPROM"):
-        database = open("database.csv", "r+")
+    def deletarUsuario(self):
+        # Mostra as tags salvas no databse e pede o nome de um para deletar
+        # Pede uma senha para prosseguir com a operação e avisa que será deletado permanentemente
+        # Mostra o código de erro
+        pass
+    
+    def AtualizarServidor(self):
+        # le todas as tags do arduino e as apresenta
+        # atualiza o database 
+        #Mostra as tags salvas no databse atualizadas
+        # mostra o código de erro
+        pass
+    
+    def EntraEstadoErro(self):
+        # apresenta código de erro
+        # sai do programa
+        pass
 
-        print("Dumpando a EEPROM do microcontrolador.")
-        resultado = requests.get("http://192.168.88.12/atualizarserver=")
-        resultado.close()
-
-        resultado = resultado.text.split("\r\n")[3:-3]
-        for indice, tag in enumerate(resultado):
-            if tag != "FFFFFFFF":
-                if tagNotIn(tag, database.readlines()):
-                    database.write(f"Desconhecido{indice}, {tag}\n")
-        
-        database.close()
-        print("Tags dumpadas com sucesso.")
-
-window.close()
+objeto = interface()
