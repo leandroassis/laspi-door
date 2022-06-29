@@ -1,5 +1,5 @@
 art
-PIL
+pillow
 platform
 os
 pandas

@@ -3,6 +3,7 @@ import PIL.Image
 from os import system
 import platform
 import pandas as pd
+import socket
 
 def logo_to_ASCII(path):
     try:
@@ -37,8 +38,19 @@ class interface():
 
     def __init__(self):
         self.apresentacao_inicial()
-        self.tags = pd.read_csv("database.csv")
 
+        print("Inicializando a aplicação...")
+        try:
+            self.tags = pd.read_csv("database.csv")
+            self.server = socket.socket()
+            self.server.bind(("172.16.15.74", 80))
+            print("Inicializando conexão via socket.")
+            self.server.listen(5)
+            self.conexao, endereco = self.server.accept()
+
+            print("Conectado com o client remoto.")
+        except:
+            pass
         while True:
             self.menu()
 
@@ -91,30 +103,44 @@ class interface():
 
         except KeyboardInterrupt:
             print("\nSaindo da aplicação...")
+            self.EncerraConsole()
             exit()
         
     def cadastrarUsuario(self):
         # Pede um nome pro usuario e avisa para a pessoa ir encostar o cartão
         # mostrar a tag e o nome inserido e o código de erro
         # mostra as tags salvas no database e a quantidade máxima de tags possiveis
-        pass
+        self.conexao.send(b"/cadastrar=\n")
+
+        recv = []
+        dado_in = ""
+        while dado_in not in ["OK", "NOP"] or len(dado_in) >= 8:
+            dado_in = self.conexao.recv(1024).decode("utf-8").split("\r\n")[0]
+
+        
 
     def deletarUsuario(self):
         # Mostra as tags salvas no databse e pede o nome de um para deletar
         # Pede uma senha para prosseguir com a operação e avisa que será deletado permanentemente
         # Mostra o código de erro
-        pass
+        self.conexao.send(b"/deletar=\n")
+        self.conexao.send(b"/addtag=%d\n"%1)
     
     def AtualizarServidor(self):
         # le todas as tags do arduino e as apresenta
         # atualiza o database 
         #Mostra as tags salvas no databse atualizadas
         # mostra o código de erro
-        pass
+        self.conexao.send(b"/atualizarserver=\n")
     
     def EntraEstadoErro(self):
         # apresenta código de erro
         # sai do programa
-        pass
+        self.conexao.send(b"/desligarsistema=\n")
+
+    def EncerraConsole(self):
+        self.conexao.close()
+        self.server.shutdown(socket.SHUT_RDWR)
+        self.server.close()
 
 objeto = interface()
