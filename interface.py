@@ -5,6 +5,17 @@ import platform
 import pandas as pd
 import socket
 
+'''
+MELHORIAS PARA OS PROXIMOS DESAVISADOS QUE CAIREM AQ:
+-> Faça uma função para parsear o valores de retorno do client (OK, NOP ou a TAG em caso de cadastro), isso vai deixar mais bonito do q só chamar o while 5 vezes...
+-> Faça uma função para verificar se o usuario/tag ja esta cadastrada pra evitar comunicação atoa com o arduino nos casos de deletar e cadastrar...
+-> Use os atributos _MAXIMO_TAGS, _ARDUINO_SUCESSO e _ARDUINO_ERRO pra tornar o código mais dinâmico e fácil de manutenção
+-> Troca esse .csv por um .db e usa o pySQL, vai ficar mais bonito aos olhos...
+
+Horas gastas nisso: 40 
+Boa sorte!
+'''
+
 def logo_to_ASCII(path):
     try:
         img = PIL.Image.open(path)
@@ -32,8 +43,6 @@ def logo_to_ASCII(path):
     return ascii_image
 
 class interface():
-    _ARDUINO_ERRO = "NOP"
-    _ARDUINO_SUCESS = "OK"
     _MAXIMO_TAGS = 45
 
     def __init__(self):
@@ -110,33 +119,79 @@ class interface():
         # Pede um nome pro usuario e avisa para a pessoa ir encostar o cartão
         # mostrar a tag e o nome inserido e o código de erro
         # mostra as tags salvas no database e a quantidade máxima de tags possiveis
+
+        usuario = input("Insira a identificação (nome) do usuário que será cadastrado: ")
+
         self.conexao.send(b"/cadastrar=\n")
 
-        recv = []
+        recebidos = []
         dado_in = ""
-        while dado_in not in ["OK", "NOP"] or len(dado_in) >= 8:
+        while dado_in not in ["OK", "NOP"] or len(dado_in) >= 3: # Se o dado que chegar for OK, NOP ou uma tag (que possui tamanho mínimo 3)
             dado_in = self.conexao.recv(1024).decode("utf-8").split("\r\n")[0]
+            if dado_in == "HTTP 200 OK":
+                print("Aproxime um cartão RFID ao painel do leitor...")
+            recebidos.append(dado_in)
 
-        
+        if "OK" in recebidos:
+            print("Tag %s associada ao usuário %s com sucesso." %recebidos[1] %usuario)
+            self.tags.append({"NOME":usuario, "TAG":recebidos[1]})
+            print("Número de tags cadastradas: %d/45" %len(self.tags.index))
+        else:
+            print("Erro ao cadastrar tag, verifique o limite de tags já cadastradas e se a tag já está cadastrada.")
 
     def deletarUsuario(self):
         # Mostra as tags salvas no databse e pede o nome de um para deletar
         # Pede uma senha para prosseguir com a operação e avisa que será deletado permanentemente
         # Mostra o código de erro
+
         self.conexao.send(b"/deletar=\n")
-        self.conexao.send(b"/addtag=%d\n"%1)
+        dado_in = ""
+        while dado_in not in ["OK", "NOP"] or len(dado_in) >= 3: # Se o dado que chegar for OK, NOP ou uma tag (que possui tamanho mínimo 3)
+            dado_in = self.conexao.recv(1024).decode("utf-8").split("\r\n")[0]
+
+        if dado_in == "OK":
+            print(self.tags.to_string())
+            usuario = input("Insira a identificação (nome) do usuário que será deletado: ")
+            for index, linha in self.tags.iterrows():
+                if(linha["NOME"] != usuario):
+                    self.conexao.send(b"/addtag=%s\n"%linha["TAG"])
+                    # recebe codigo de retorno e parseia ele
+                else:
+                    self.tags.drop([linha["NOME"]], inplace=True)
+                    deletado = True
+            if deletado:
+                print("Usuario %s deletado com sucesso." %usuario)
+                print("Tags cadastradas: %d/45" %len(self.tags.index))
+            else:
+                print("O usuário %s nao foi encontrado." %usuario)
+        else:
+            print("Ocorreu um erro durante o processo de deletar um usuário")
     
     def AtualizarServidor(self):
-        # le todas as tags do arduino e as apresenta
         # atualiza o database 
         #Mostra as tags salvas no databse atualizadas
         # mostra o código de erro
         self.conexao.send(b"/atualizarserver=\n")
+        dado_in = ""
+        while dado_in not in ["OK", "NOP"]:
+            dado_in = self.conexao.recv(1024).decode("utf-8").split("\r\n")[0]
+            if dado_in != "HTTP 200 OK":
+                self.adicionaTagNoDatabase(dado_in)
+        if dado_in == "OK":
+            print("Tags dumpadas com sucesso. Número de tags cadastradas: %d/45" %len(self.tags.index))
+            print(self.tags.to_string())
+        else:
+            print("Erro dumpando tags.")
     
     def EntraEstadoErro(self):
         # apresenta código de erro
         # sai do programa
         self.conexao.send(b"/desligarsistema=\n")
+        while dado_in not in ["OK", "NOP"]:
+            dado_in = self.conexao.recv(1024).decode("utf-8").split("\r\n")[0]
+        if dado_in == "OK":
+            print("Sistema desabilitado até o próximo reset manual. Saindo da aplicação.")
+            self.EncerraConsole()
 
     def EncerraConsole(self):
         self.conexao.close()
