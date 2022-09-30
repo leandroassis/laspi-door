@@ -18,7 +18,7 @@
  
 MFRC522 rfid(RFID_SS_PIN, RST_PIN);
 byte mac_address[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
-byte server[] = {XX, XX, XX, XX};
+byte server[] = {172, 16, 15, 74};
 
 String tags_temp[TAG_COUNT], readString = String(30);
 int free_address;
@@ -26,7 +26,7 @@ int free_address;
 void(* resetFunc) (void) = 0;   // Função de reset
 
 void setup(){
-
+  delay(3000);
   pinMode(ETHERNET_SS_PIN, OUTPUT);
   pinMode(4,OUTPUT);
   digitalWrite(ETHERNET_SS_PIN, LOW); 
