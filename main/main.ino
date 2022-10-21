@@ -2,70 +2,90 @@
 #include <MFRC522.h>
 #include <SPI.h>
 #include <Ethernet.h>
+#include <avr/wdt.h>
+
+/*
+Todo:
+ - refatorar implementação das tags, carregar diretamente do servidor, caso nao esteja up carrega da eeprom
+ - reiniciar a cada x minutos para evitar erros e travamentos DONE
+ - implementar realimentação da relé (verificar se ela realmente chaveou dps que o sinal foi dado)  
+ - implementar novo sistema de redundância e de desligamento correto
+ - melhorar comunicação com servidor cerberus
+*/
  
+// pinos do barramento SPI
 #define RFID_SS_PIN      8          // Chip Enable do sensor rfid    
 #define ETHERNET_SS_PIN  10         // Chip enable do módulo ethernet
 #define RST_PIN     9           // Reset do barramento SPI
+
+// pinos do sistema de acionamento da porta/pinos do sistema de redundância
 #define RELAY_PIN   5           // Pino de acionar a relé
 #define RELAY2      2           // Pino de apoio ao acionamento da relé 
-#define INTERRUP    3           // Pino de conexão com o clock do 555
-#define KEEP_PIN    6           // Pino de saída de sinal do arduino para manter circuito de redundância   
+
+// pinos da indicação luminosa
 #define RED        A5           // Pino de controle do led de indicação
 #define BLUE       A4           // Pino de controle do led de indicação
 #define GREEN      A3           // Pino de controle do led de indicação
+#define LED_GND    A2           // Pino de GND para os leds de indicação
 
-#define TAG_COUNT 45            // Quantidade de cartões a serem implementados(MAX: 35)
+// configurações de reset regular do sistema
+#define ARDUINO_AUTO_RST  7     // Pino de reset do arduino
+#define RESET_TIME        1200000 // 20 min
+
+#define TAG_COUNT 45            // Quantidade de cartões a serem implementados(MAX: 50)
  
-MFRC522 rfid(RFID_SS_PIN, RST_PIN);
-byte mac_address[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
+// Configurações dos periféricos
+MFRC522 rfid(RFID_SS_PIN, RST_PIN); // inicialização do sensor RFID
+
+byte mac_address[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED}; // configurações de rede
 byte server[] = {172, 16, 15, 74};
 
-String tags_temp[TAG_COUNT], readString = String(30);
-int free_address;
+String tags_temp[TAG_COUNT]; // Array de tags válidas
+String readString = String(30); //
+int free_address; // ponteiro para o último endereço livre na memória
 
-void(* resetFunc) (void) = 0;   // Função de reset
+unsigned long start_time; // variável para o tempo de inicio do programa
 
 void setup(){
-  delay(3000);
+  digitalWrite(ARDUINO_AUTO_RST, HIGH);
+  delay(50);
+
+  start_time  = millis(); // Seta o tempo de inicio para reboot regular
+  wdt_enable(WDTO_8S);
+  
+  pinMode(ARDUINO_AUTO_RST, OUTPUT);
   pinMode(ETHERNET_SS_PIN, OUTPUT);
   pinMode(4,OUTPUT);
+
   digitalWrite(ETHERNET_SS_PIN, LOW); 
   digitalWrite(4, HIGH);
-  Serial.begin(9600);           
+  //Serial.begin(9600);           
   //Serial.println("Inicializando o sistema");
 
   EEPROMDump();
-  Serial.println("Tags dumpadas da memória para o vetor temporário.");
+  //Serial.println("Tags dumpadas da memória para o vetor temporário.");
   
   SPI.begin();                 // Inicia a comunicação SPI 
   rfid.PCD_Init();             // Inicia o sensor RFID
   Ethernet.begin(mac_address); // Inicia o shield Ethernet
 
   //Serial.println("Ethernet, sensor RFID, e barramento SPI configurados e setados.");
-  delay(100);
   
   pinMode(RELAY_PIN, OUTPUT);
-  pinMode(KEEP_PIN, OUTPUT);
   pinMode(RELAY2, OUTPUT);
-  pinMode(A2, OUTPUT);
+  pinMode(LED_GND, OUTPUT);
   pinMode(RED, OUTPUT);
   pinMode(BLUE, OUTPUT);
   pinMode(GREEN, OUTPUT);
-
-  pinMode(INTERRUP, INPUT); 
 
   // Inicia o RGB em azul
   digitalWrite(RED, LOW);       
   digitalWrite(BLUE, HIGH);
   digitalWrite(GREEN, LOW);
-  digitalWrite(A2, LOW);
-
-  //digitalWrite(KEEP_PIN, HIGH); // Inicia pulso do arduino em 5V  
-  //attachInterrupt(digitalPinToInterrupt(INTERRUP), KeepRelayAlive, CHANGE); // O arduino emite um sinal de "prova de vida" sincronizado ao clock
+  digitalWrite(LED_GND, LOW);
 
   //Serial.println("Pinos do arduino inicializados com sucesso.");
 
-  //digitalWrite(RELAY_PIN, LOW); // Porta trancada
   digitalWrite(RELAY2, LOW);    // Porta trancada
 }
  
@@ -73,17 +93,18 @@ void loop() {
   bool RFID_Found = false;                // Variável auxiliar para controle de interface do usuário
   String strID = "";                      // Variável para guardar o uid lido
 
-  if(!rfid.PCD_PerformSelfTest()){
-    // Performa selftest no sensor RFID, caso falhe a porta é mantida aberta
-    //Serial.println("Estado de erro");
-    PermanentStateError();
+  wdt_reset();
+  if((millis() > start_time + RESET_TIME) || !rfid.PCD_PerformSelfTest()){
+    // se o programa rodar por RESET_TIME, ele reboota para diminuir janela de erros
+    // ou se o sensor RFID parar de funcionar
+    digitalWrite(ARDUINO_AUTO_RST, LOW);
   }
     
   ClientHandler();
 
   strID = read_UID();
   if(strID == "") return;
-  Serial.println(strID);
+  //Serial.println(strID);
   
   
   for(int i = 0; i < TAG_COUNT; i++){
@@ -101,13 +122,17 @@ void loop() {
 
 void ClientHandler(){
   EthernetClient client;
+
   if(client.connect(server, 80)){
+
     client.println("HTTP/1.1 200 OK");
     while(client.available()){
         char c = client.read();
+
         if(readString.length() < 100) readString += c;
         if(c == '\n'){
-          Serial.println(readString);
+          //Serial.println(readString);
+          
           if(readString.indexOf("cadastrar=") > 0){
             // Le UID, cadastra na eeprom e envia a tag
             //Serial.println("Cadastrar tag");
@@ -123,12 +148,13 @@ void ClientHandler(){
             do{
               tag = read_UID();
             }while(tag == "");
+
             if(!writeTagInEEPROM(tag)){
               EEPROMDump();
               client.println(tag);
-              client.println("OK");
+              client.println("OK\n");
             }
-            else client.println("NOP");
+            else client.println("NOP\n");
             
             digitalWrite(BLUE, LOW);
             digitalWrite(GREEN, HIGH);
@@ -183,7 +209,7 @@ void ClientHandler(){
             Serial.println("Resetando...");
             client.println("OK");
             client.stop();
-            resetFunc();
+            digitalWrite(ARDUINO_AUTO_RST, LOW);
           }
           readString = "";
           client.stop();
@@ -270,7 +296,7 @@ void RFID_Rejected(){
   digitalWrite(RED, HIGH);
   digitalWrite(BLUE, LOW);
   digitalWrite(GREEN, LOW);
-  delay(3000);
+  delay(2000);
   // Volta ao estado inicial
   digitalWrite(RED, LOW);
   digitalWrite(BLUE, HIGH);
@@ -279,7 +305,6 @@ void RFID_Rejected(){
 
 void RFID_Accepted(){
   // Controle do led caso a tag RFID esteja cadastrado
-  
   // Liga o led verde e abre a porta por 5s
   digitalWrite(RELAY_PIN, HIGH); 
   digitalWrite(RELAY2, HIGH);
@@ -326,10 +351,3 @@ void PermanentStateError(){
     delay(1200);
   }  
 }
-
-/*
-void KeepRelayAlive(){
-  // Toda vez que o vetor de interrupção for chamado, o valor no pino KEEP é invertido
-  digitalWrite(KEEP_PIN, !digitalRead(KEEP_PIN));
-}
-*/
