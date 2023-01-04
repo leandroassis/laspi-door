@@ -50,7 +50,6 @@ void setup() {
   wdt_enable(WDTO_8S);    // Seta o tempo de reset do WDT em 8 segundos
 
   // Inicialização dos periféricos
-  pinMode(ARDUINO_AUTO_RST, OUTPUT);
   pinMode(ETHERNET_SS_PIN, OUTPUT);
   pinMode(SDCARD_SS_PIN, OUTPUT);
 
@@ -76,7 +75,6 @@ void setup() {
 
   EEPROMDump();
   digitalWrite(RELAY_PIN, HIGH);
-  EstadoPorta = true;
 }
 
 void loop() {
@@ -84,17 +82,22 @@ void loop() {
   String strID = "";        // Variável para guardar o uid lido
 
   wdt_reset();
-  if ((millis() >= start_time + RESET_TIME) || (EstadoPorta != DigitalRead(RELAY_CHECK)) || !rfid.PCD_PerformSelfTest()) {
+  if ((millis() >= start_time + RESET_TIME) || !digitalRead(RELAY_CHECK) || !rfid.PCD_PerformSelfTest()) {
     // se o programa rodar por RESET_TIME, ele reboota para diminuir janela de erros
     // se o sensor RFID não passar no selftest ou a verificação da relé falhar
     resetFunc();
   }
 
-  strID = read_UID();  // tenta ler um cartão
-  if (strID == "") return;
+  if (rfid.PICC_IsNewCardPresent() || rfid.PICC_ReadCardSerial()) {
+    for (byte i = 0; i < 4; i++) {
+      strID += String(rfid.uid.uidByte[i], HEX);  // Realiza o parser da tag lida pelo sensor em um string
+    }
+    strID.toUpperCase();
+  }
 
   for (int i = 0; i < TAG_COUNT; i++) {
-    if (strID == tags_temp[i]) {  // Se a tag estiver no vetor de tags (foi cadastrada previamente) a porta abre
+    if (strID == tags_temp[i]) {
+      // Se a tag estiver no vetor de tags, abre a porta
       RFID_Accepted();
       RFID_Found = true;
       break;
@@ -106,6 +109,7 @@ void loop() {
   rfid.PCD_StopCrypto1();
 }
 
+/*
 void ClientHandler() {
   EthernetClient client;
 
@@ -196,19 +200,7 @@ void ClientHandler() {
     }
   }
 }
-
-String read_UID() {
-  String uid = "";
-
-  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return uid;  // senão tiver cartão no leitor, segue
-
-  for (byte i = 0; i < 4; i++) {
-    uid += String(rfid.uid.uidByte[i], HEX);  // Realiza o parser da tag lida pelo sensor em um string
-  }
-  uid.toUpperCase();
-
-  return uid;
-}
+*/
 
 void EEPROMDump() {
   // le todos os 1024 endereços da eeprom, faz o parser (monta uma tag a cada 4 bytes lidos) e copia para o vetor tags_temp
@@ -261,11 +253,15 @@ unsigned short writeTagInEEPROM(String ID) {
 void RFID_Rejected() {
   // Controle do led caso a tag RFID não esteja cadastrado
 
+  if(digitalRead(RELAY_CHECK) != true) resetFunc();
+
   // Liga o vermelho por 2.5 s
   digitalWrite(RED, HIGH);
   digitalWrite(BLUE, LOW);
   digitalWrite(GREEN, LOW);
+
   delay(2500);
+
   // Volta ao estado inicial
   digitalWrite(RED, LOW);
   digitalWrite(BLUE, HIGH);
@@ -274,50 +270,24 @@ void RFID_Rejected() {
 
 void RFID_Accepted() {
   // Controle do led caso a tag RFID esteja cadastrado
-  // Liga o led verde e abre a porta por 5s
-  digitalWrite(RELAY_PIN, HIGH);
-  digitalWrite(RELAY2, HIGH);
+
+  digitalWrite(RELAY_PIN, LOW); // Desarma a tranca
+
+  // Coloca o led em verde
   digitalWrite(GREEN, HIGH);
   digitalWrite(RED, LOW);
   digitalWrite(BLUE, LOW);
+
+  if(digitalRead(RELAY_CHECK)) resetFunc();
+
   delay(5000);
-  // Volta o led para o azul e tranca a porta
-  digitalWrite(RELAY_PIN, LOW);
-  digitalWrite(RELAY2, LOW);
+
+  digitalWrite(RELAY_PIN, HIGH); // Arma a tranca
+
+  // Volta o led para o azul 
   digitalWrite(GREEN, LOW);
   digitalWrite(RED, LOW);
   digitalWrite(BLUE, HIGH);
-}
 
-void ErrorAddingTag() {
-  // Pisca 10 vezes em vermelho com intervalos de 0.2s e depois volta ao azul sinalizando erro ao cadastrar
-  //Serial.println("Erro adicionando uma tag no database.");
-  for (int i = 0; i < 10; i++) {
-    digitalWrite(BLUE, LOW);
-    digitalWrite(GREEN, LOW);
-    digitalWrite(RED, HIGH);
-    delay(200);
-    digitalWrite(RED, LOW);
-    delay(200);
-  }
-  digitalWrite(BLUE, HIGH);
-  digitalWrite(GREEN, LOW);
-  digitalWrite(RED, LOW);
-  return;
-}
-
-void PermanentStateError() {
-  // Led RGB fica piscando em vermelho com intervalos de 1.2s e abre a porta
-  //Serial.println("Entrando em estado de erro permanente.");
-  digitalWrite(BLUE, LOW);
-  digitalWrite(GREEN, LOW);
-  while (1) {
-    digitalWrite(RED, HIGH);
-    digitalWrite(RELAY_PIN, HIGH);
-    digitalWrite(RELAY2, HIGH);
-    delay(1200);
-    digitalWrite(RED, LOW);
-    delay(1200);
-  }
-}
-  
+  if(!digitalRead(RELAY_CHECK)) resetFunc();
+}  
