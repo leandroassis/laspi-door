@@ -180,11 +180,7 @@ unsigned short writeTagInEEPROM(String ID) {
   char temp_char[2];
   free_address = EEPROM.read(0);  // endereço que armazena o proximo endereço livre
 
-  if (free_address == 1 + TAG_COUNT * 4) return 1;
-
-  for (int i = 0; i < TAG_COUNT; i++) {
-    if (ID == tags_temp[i]) return 1;  // verifica se a nova tag já não está no buffer (consequentemente na EEPROM)
-  }
+  if (free_address == 1 + TAG_COUNT * 4) return 1; // se o próximo endereço livre for além do limite de tags, cancela
 
   for (int i = 0; i < 8; i += 2) {
     temp_char[0] = ID[i];
