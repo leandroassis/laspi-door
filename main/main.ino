@@ -1,7 +1,7 @@
 #include <EEPROM.h>
 #include <MFRC522.h>
-#include <SPI.h>
 #include <Ethernet.h>
+#include <SPI.h>
 #include <avr/wdt.h>
 
 /*
@@ -26,24 +26,26 @@ Todo:
 #define GREEN A3    // Pino de controle do led de indicação
 #define LED_GND A2  // Pino de GND para os leds de indicação
 
-// configurações de reset do sistema
+// configurações de caracteristicas do sistema
 #define RESET_TIME 3600000    // 1 hora
 void (*resetFunc)(void) = 0;  // função de reset
 
-#define TAG_COUNT 45  // Quantidade de cartões que podem ser gravados
+#define TAG_COUNT 45        // Quantidade de cartões que podem ser gravados
+#define UPDATE_TIME 300000  // 5 minutos
 
 // Configurações dos periféricos
 MFRC522 rfid(RFID_SS_PIN, RST_PIN);  // inicialização do sensor RFID
+EthernetClient client;
 
 byte mac_address[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };  // configurações de rede
-byte server[] = { 172, 16, 15, 74 };                          // IP do servidor
+char server[] = "172.16.15.74";                               // IP do servidor
 
-String tags_temp[TAG_COUNT];  // Buffer para manter as tags salvas na EEPROM
+// Variáveis de controle
+String tags_temp[TAG_COUNT];  // Buffer para manter as tags durante trabalho
 int free_address;             // ponteiro para o último endereço livre na memória
 
-unsigned long start_time;  // variável para o tempo de inicio do programa
-
-bool EstadoPorta = false;  // porta trancada (true) ou aberta (false)
+unsigned long start_time;   // variável para o tempo de inicio do programa
+unsigned long last_update;  // variável para o tempo da última atualização das tags
 
 void setup() {
   start_time = millis();  // Seta o tempo de inicio para reboot regular
@@ -58,7 +60,9 @@ void setup() {
 
   SPI.begin();
   rfid.PCD_Init();
+  Ethernet.init(ETHERNET_SS_PIN);
   Ethernet.begin(mac_address);
+  delay(1000);
 
   // Inicialização do pinout
   pinMode(RELAY_PIN, OUTPUT);
@@ -73,8 +77,11 @@ void setup() {
   digitalWrite(GREEN, LOW);
   digitalWrite(LED_GND, LOW);
 
-  EEPROMDump();
-  digitalWrite(RELAY_PIN, HIGH);
+  client.setConnectionTimeout(200);
+  // To do: trocar o hardware para uma placa arduino que suporte HTTPS
+  if (client.connect(server, 80)) DumpTagsFromServer();  // Se o servidor estiver UP, pega as tags do servidor
+  else EEPROMDump();                                     // Copia todas as tags da EEPROM pro buffer
+  digitalWrite(RELAY_PIN, HIGH);                         // tranca a porta
 }
 
 void loop() {
@@ -88,11 +95,14 @@ void loop() {
     resetFunc();
   }
 
+  // se o servidor estiver UP e passar 5 minutos, atualiza as tags a partir do servidor
+  if ((millis() >= last_update + UPDATE_TIME) && (client.connect(server, 80))) DumpTagsFromServer();
+
   if (rfid.PICC_IsNewCardPresent() || rfid.PICC_ReadCardSerial()) {
     for (byte i = 0; i < 4; i++) {
-      strID += String(rfid.uid.uidByte[i], HEX);  // Realiza o parser da tag lida pelo sensor em um string
+      strID += String(rfid.uid.uidByte[i], HEX);  // Realiza o parser da tag lida pelo sensor em uma string
     }
-    strID.toUpperCase();
+    strID.toUpperCase();  // salva a string em uppercase
   }
 
   for (int i = 0; i < TAG_COUNT; i++) {
@@ -103,111 +113,50 @@ void loop() {
       break;
     }
   }
-  if (!RFID_Found) RFID_Rejected();
+  if (!RFID_Found) RFID_Rejected();  // senão, rejeita o cartão
 
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 }
 
-/*
-void ClientHandler() {
-  EthernetClient client;
+void DumpTagsFromServer() {
+  short len;
+  byte temp[4];
+  byte *buffer = NULL;
 
-  if (client.connect(server, 80)) {
+  // Request HTTP
+  client.println("GET /tags HTTP/1.1");
+  client.println("Host: " + String(server));
+  client.println("Connection: close");
+  client.println();
 
-    client.println("HTTP/1.1 200 OK");
-    while (client.available()) {
-      char c = client.read();
+  len = client.available();  // ve quantos bytes o server respondeu
+  if (len > 0) {
+    if (len > TAG_COUNT * 5) len = TAG_COUNT * 5;
+    buffer = (byte *)calloc(len, sizeof(byte));  // buffer com no max. 225 bytes (45 tags de 4 bytes + \n)
+    client.read(buffer, len);                    // escreve os bytes no buffer
+  }
 
-      if (readString.length() < 100) readString += c;
-      if (c == '\n') {
-        //Serial.println(readString);
-
-        if (readString.indexOf("cadastrar=") > 0) {
-          // Le UID, cadastra na eeprom e envia a tag
-          //Serial.println("Cadastrar tag");
-
-          digitalWrite(RED, LOW);
-          digitalWrite(GREEN, LOW);
-          for (int i = 0; i < 10; i++) {
-            digitalWrite(BLUE, !digitalRead(BLUE));
-            delay(300);
-          }
-
-          String tag = "";
-          do {
-            tag = read_UID();
-          } while (tag == "");
-
-          if (!writeTagInEEPROM(tag)) {
-            EEPROMDump();
-            client.println(tag);
-            client.println("OK\n");
-          } else client.println("NOP\n");
-
-          digitalWrite(BLUE, LOW);
-          digitalWrite(GREEN, HIGH);
-          digitalWrite(RED, LOW);
-          delay(2500);
-          digitalWrite(BLUE, HIGH);
-          digitalWrite(GREEN, LOW);
-          digitalWrite(RED, LOW);
-
-          //for(int i = 0; i < TAG_COUNT; i++) Serial.println(tags_temp[i]);
-        } else if (readString.indexOf("deletar=") > 0) {
-          // seta o free_address para 1 e limpa toda a memória eeprom
-          //Serial.println("Resetar toda a memória.");
-          EEPROM.write(0, 1);
-          for (int i = 1; i < 1024; i++) {
-            EEPROM.write(i, 0xFF);
-            delay(6);
-          }
-          EEPROMDump();
-          client.println("OK");
-          //Serial.println("Memória resetada.");
-        } else if (readString.indexOf("addtag=") > 0) {
-          // Adiciona uma tag na memória
-          //Serial.println("Adicionar tag: ");
-          //Serial.println(readString.substring(readString.indexOf("addtag=")+7, readString.indexOf("addtag=")+15));
-          if (!writeTagInEEPROM(readString.substring(readString.indexOf("addtag=") + 7, readString.indexOf("addtag=") + 15))) {
-            EEPROMDump();
-            client.println("OK");
-          } else client.println("NOP");
-
-          //for(int i = 0; i < TAG_COUNT; i++) Serial.println(tags_temp[i]);
-        } else if (readString.indexOf("atualizarserver=") > 0) {
-          Serial.println("Atualizar servidor.");
-          EEPROMDump();
-          for (int i = 0; i < TAG_COUNT; i++) {
-            client.println(tags_temp[i]);
-          }
-          client.println("OK");
-          //Serial.println("Servidor atualizado.");
-        } else if (readString.indexOf("desligarsistema=") > 0) {
-          Serial.println("Desligar sistema");
-          client.println("OK");
-          client.stop();
-          PermanentStateError();
-        } else if (readString.indexOf("resetarsistema=") > 0) {
-          Serial.println("Resetando...");
-          client.println("OK");
-          client.stop();
-          digitalWrite(ARDUINO_AUTO_RST, LOW);
-        }
-        readString = "";
-        client.stop();
-      }
+  if (sizeof(buffer) == len) {
+    free_address = 1;  // seta o ponteiro para o inicio da EEPROM
+    for (int i = 0; i < len; i += 5) {
+      temp[0] = buffer[i];
+      temp[1] = buffer[i + 1];
+      temp[2] = buffer[i + 2];
+      temp[3] = buffer[i + 3];
+      writeTagInEEPROM(String((char *)temp));
     }
   }
+  client.stop();           // fecha conexão
+  last_update = millis();  // salva o momento da última atualização
+  EEPROMDump();            // copia as tags atualizadas da EEPROM pro buffer
 }
-*/
 
 void EEPROMDump() {
   // le todos os 1024 endereços da eeprom, faz o parser (monta uma tag a cada 4 bytes lidos) e copia para o vetor tags_temp
   int contador = 0;
   String temp = "";
   for (int j = 0; j < TAG_COUNT; j++) tags_temp[j] = "";
-  //Serial.println("Vetor de tags limpo.");
 
   for (int i = 1; i <= 4 * TAG_COUNT; i++) {  // Dumpa a EEPROM em um array para evitar consultas excessivas
     contador++;
@@ -223,9 +172,7 @@ void EEPROMDump() {
       temp = "";
     }
   }
-  Serial.println("--------- Vetor de tags ---------");
   for (int i = 0; i < TAG_COUNT; i++) Serial.println(tags_temp[i]);
-  //Serial.println("Tags dumpadas com sucesso.");
 }
 
 unsigned short writeTagInEEPROM(String ID) {
@@ -253,7 +200,7 @@ unsigned short writeTagInEEPROM(String ID) {
 void RFID_Rejected() {
   // Controle do led caso a tag RFID não esteja cadastrado
 
-  if(digitalRead(RELAY_CHECK) != true) resetFunc();
+  if (!digitalRead(RELAY_CHECK)) resetFunc();
 
   // Liga o vermelho por 2.5 s
   digitalWrite(RED, HIGH);
@@ -271,23 +218,23 @@ void RFID_Rejected() {
 void RFID_Accepted() {
   // Controle do led caso a tag RFID esteja cadastrado
 
-  digitalWrite(RELAY_PIN, LOW); // Desarma a tranca
+  digitalWrite(RELAY_PIN, LOW);  // Desarma a tranca
 
   // Coloca o led em verde
   digitalWrite(GREEN, HIGH);
   digitalWrite(RED, LOW);
   digitalWrite(BLUE, LOW);
 
-  if(digitalRead(RELAY_CHECK)) resetFunc();
+  if (digitalRead(RELAY_CHECK)) resetFunc();
 
   delay(5000);
 
-  digitalWrite(RELAY_PIN, HIGH); // Arma a tranca
+  digitalWrite(RELAY_PIN, HIGH);  // Arma a tranca
 
-  // Volta o led para o azul 
+  // Volta o led para o azul
   digitalWrite(GREEN, LOW);
   digitalWrite(RED, LOW);
   digitalWrite(BLUE, HIGH);
 
-  if(!digitalRead(RELAY_CHECK)) resetFunc();
-}  
+  if (!digitalRead(RELAY_CHECK)) resetFunc();
+}
