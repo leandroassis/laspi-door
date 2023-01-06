@@ -138,7 +138,7 @@ void DumpTagsFromServer() {
   }
 
   if (sizeof(buffer) == len) {
-    free_address = 1;  // seta o ponteiro para o inicio da EEPROM
+    EEPROM.write(0, 1);  // seta o ponteiro de endereço livre para o inicio da EEPROM
     for (int i = 0; i < len; i += 5) {
       temp[0] = buffer[i];
       temp[1] = buffer[i + 1];
@@ -180,7 +180,7 @@ unsigned short writeTagInEEPROM(String ID) {
   char temp_char[2];
   free_address = EEPROM.read(0);  // endereço que armazena o proximo endereço livre
 
-  if (free_address == 1 + TAG_COUNT * 4) return 1; // se o próximo endereço livre for além do limite de tags, cancela
+  if (free_address == 1 + TAG_COUNT * 4) return 1;  // se o próximo endereço livre for além do limite de tags, cancela
 
   for (int i = 0; i < 8; i += 2) {
     temp_char[0] = ID[i];
