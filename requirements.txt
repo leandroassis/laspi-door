@@ -1,5 +1,0 @@
-art
-pillow
-platform
-os
-pandas
