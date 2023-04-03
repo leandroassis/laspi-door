@@ -1,0 +1,4 @@
+
+https://arduinodiy.wordpress.com/2017/09/08/arduino-watchdog-timer/
+https://github.com/upperboundcom/watchdog_timer_demo/blob/master/watchdog_timer_demo.ino
+https://upperbound.com/projects/555-watchdog-timer/
