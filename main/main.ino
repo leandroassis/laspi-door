@@ -1,14 +1,7 @@
-#include <EEPROM.h>
-#include <MFRC522.h>
-#include <Ethernet.h>
-#include <SPI.h>
 #include <avr/wdt.h>
-
-/*
-Todo:
- - refatorar implementação das tags, carregar diretamente do servidor, caso nao esteja up carrega da eeprom
- - melhorar comunicação com servidor cerberus (sockets que cospem as tags salvas toda vez que liga)
-*/
+#include <SPI.h>
+#include <Ethernet.h>
+#include <MFRC522.h>
 
 // pinos do barramento SPI
 #define RFID_SS_PIN 8       // Chip Enable do sensor rfid
@@ -19,6 +12,7 @@ Todo:
 // pinos do sistema de acionamento da tranca
 #define RELAY_PIN 2    // Pino de acionar a relé
 #define RELAY_CHECK 7  // Pino para checar se a relé está acionando
+#define GND 5          // Pino de GND virtual para o relay_check
 
 // pinos da indicação luminosa
 #define RED A5      // Pino de controle do led de indicação
@@ -27,42 +21,39 @@ Todo:
 #define LED_GND A2  // Pino de GND para os leds de indicação
 
 // configurações de caracteristicas do sistema
-#define RESET_TIME 3600000    // 1 hora
 void (*resetFunc)(void) = 0;  // função de reset
-
-#define TAG_COUNT 45        // Quantidade de cartões que podem ser gravados
-#define UPDATE_TIME 300000  // 5 minutos
+#define RESET_RFID_INT  45000UL
 
 // Configurações dos periféricos
 MFRC522 rfid(RFID_SS_PIN, RST_PIN);  // inicialização do sensor RFID
 EthernetClient client;
 
 byte mac_address[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };  // configurações de rede
-char server[] = "172.16.15.74";                               // IP do servidor
+char server[] = "172.16.15.1";                              // IP do servidor
 
-// Variáveis de controle
-String tags_temp[TAG_COUNT];  // Buffer para manter as tags durante trabalho
-int free_address;             // ponteiro para o último endereço livre na memória
-
-unsigned long start_time;   // variável para o tempo de inicio do programa
-unsigned long last_update;  // variável para o tempo da última atualização das tags
+unsigned long rfid_reset_timer = 0;
 
 void setup() {
-  start_time = millis();  // Seta o tempo de inicio para reboot regular
-  wdt_enable(WDTO_8S);    // Seta o tempo de reset do WDT em 8 segundos
+  //Serial.begin(9600);
+
+  wdt_enable(WDTO_8S);  // Seta o tempo de reset do wdt em 8 segundos
+  wdt_reset();
 
   // Inicialização dos periféricos
-  pinMode(ETHERNET_SS_PIN, OUTPUT);
   pinMode(SDCARD_SS_PIN, OUTPUT);
-
-  digitalWrite(ETHERNET_SS_PIN, LOW);
   digitalWrite(SDCARD_SS_PIN, HIGH);
 
   SPI.begin();
   rfid.PCD_Init();
+  delay(1000);
+
+  wdt_reset();
+
   Ethernet.init(ETHERNET_SS_PIN);
   Ethernet.begin(mac_address);
   delay(1000);
+
+  //Serial.println(Ethernet.localIP());
 
   // Inicialização do pinout
   pinMode(RELAY_PIN, OUTPUT);
@@ -71,166 +62,210 @@ void setup() {
   pinMode(RED, OUTPUT);
   pinMode(BLUE, OUTPUT);
   pinMode(GREEN, OUTPUT);
+  pinMode(GND, OUTPUT);
+
+  //Serial.println("1");
 
   digitalWrite(RED, LOW);
   digitalWrite(BLUE, HIGH);
   digitalWrite(GREEN, LOW);
   digitalWrite(LED_GND, LOW);
+  digitalWrite(GND, LOW);
 
-  client.setConnectionTimeout(200);
-  // To do: trocar o hardware para uma placa arduino que suporte HTTPS
-  if (client.connect(server, 80)) DumpTagsFromServer();  // Se o servidor estiver UP, pega as tags do servidor
-  else EEPROMDump();                                     // Copia todas as tags da EEPROM pro buffer
-  digitalWrite(RELAY_PIN, HIGH);                         // tranca a porta
+  wdt_reset();
+
+  client.setConnectionTimeout(1300);
+  client.connect(server, 8000);    // conecta com o servidor
+  digitalWrite(RELAY_PIN, LOW);  // tranca a porta
+  //Serial.println("Inicializado");
 }
 
 void loop() {
-  bool RFID_Found = false;  // Variável auxiliar para controle de interface do usuário
-  String strID = "";        // Variável para guardar o uid lido
+  wdt_reset();  // reseta o watchdog timer
 
+  unsigned int rfid_down_count = 0;
+  String strID = "";  // Variável para guardar o uid lido
+  byte c[3] = { 0 };  // buffer pra receber resposta do servidor
+  short len = 0;      // quantidades de bytes pra ler
+
+check_conn:
+  while(!client.connected()) {
+    // enquanto o servidor não estiver ligado
+
+    if(client.connect(server, 8000) == 1){
+      digitalWrite(BLUE, LOW);
+      digitalWrite(GREEN, LOW);
+      digitalWrite(RED, LOW);
+      break;// tenta reconectar
+    }
+
+    wdt_reset();
+
+    digitalWrite(BLUE, LOW);
+    digitalWrite(GREEN, LOW);
+    digitalWrite(RED, LOW);
+    digitalWrite(RELAY_PIN, HIGH);
+    delay(1500);
+    
+    digitalWrite(BLUE, LOW);
+    digitalWrite(GREEN, LOW);
+    digitalWrite(RED, HIGH);
+    digitalWrite(RELAY_PIN, HIGH);
+    delay(1500);
+    //Serial.println("Não conectado");
+  }
+  
+  digitalWrite(ETHERNET_SS_PIN, HIGH);
+  delay(50);
+  while(!rfid.PCD_PerformSelfTest() || (millis() - rfid_reset_timer >= RESET_RFID_INT)) {
+  // se o sensor RFID não passar no selftest ou a verificação da relé falhar, reiniciar
+  //Serial.println(digitalRead(RELAY_CHECK));
+
+    //client.println("GET /logs?text="+String(rfid.PCD_PerformSelfTest()));
+    //client.println("GET /logs?text=rfiderror");
+    wdt_reset();
+
+    if(millis() - rfid_reset_timer >= RESET_RFID_INT) rfid_reset_timer += RESET_RFID_INT;
+
+    if(rfid_down_count >= 10) {
+      digitalWrite(BLUE, LOW);
+      digitalWrite(GREEN, HIGH);
+      digitalWrite(RED, LOW);
+      digitalWrite(RELAY_PIN, HIGH);
+    }
+
+    digitalWrite(RST_PIN, LOW);
+    delay(50);
+    digitalWrite(RST_PIN, HIGH);
+    rfid.PCD_Init();
+    delay(500);
+    rfid.PCD_Reset();
+    delay(500);
+
+    rfid_down_count += 1;
+
+    //resetar();
+  }
+  
+  //Serial.println("Conectado");
+  digitalWrite(GREEN, LOW);
+  digitalWrite(RED, LOW);
+  digitalWrite(BLUE, HIGH);
+  digitalWrite(RELAY_PIN, LOW);
+  delay(50);
+
+  // rotina de controle da porta e interface com usuário
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()){
+    digitalWrite(ETHERNET_SS_PIN, LOW);
+    return;
+  }
+
+  wdt_reset();  // reseta o watchdog timer
+
+  //client.println("GET /logs?text=tagreconhecida");
+
+  // se um cartão se aproximar da leitora
+  for (byte i = 0; i < 4; i++) strID += String(rfid.uid.uidByte[i], HEX);  // Realiza o parser da tag lida pelo sensor em uma string
+  strID.toUpperCase();
+
+  digitalWrite(ETHERNET_SS_PIN, LOW);
+  delay(50);
   wdt_reset();
-  if ((millis() >= start_time + RESET_TIME) || !digitalRead(RELAY_CHECK) || !rfid.PCD_PerformSelfTest()) {
-    // se o programa rodar por RESET_TIME, ele reboota para diminuir janela de erros
-    // se o sensor RFID não passar no selftest ou a verificação da relé falhar
-    resetFunc();
-  }
+  client.println("GET /5e9315ffcbd7274dafe3a2fbe4e51f00ef38a53e2a78cfcf8e8303a3b2bd1dca?uid=" + strID);  // envia a ultima tag lida
+  client.println();
+  
+  //Serial.println("send");
+  wdt_reset();
+  if((len = client.available())) {
+    client.read(c, len);
+    //Serial.println(c[1]);
+    //Serial.println(len);
 
-  // se o servidor estiver UP e passar 5 minutos, atualiza as tags a partir do servidor
-  if ((millis() >= last_update + UPDATE_TIME) && (client.connect(server, 80))) DumpTagsFromServer();
-
-  if (rfid.PICC_IsNewCardPresent() || rfid.PICC_ReadCardSerial()) {
-    for (byte i = 0; i < 4; i++) {
-      strID += String(rfid.uid.uidByte[i], HEX);  // Realiza o parser da tag lida pelo sensor em uma string
+    if (c[1] == 83){
+        //client.println("GET /logs?text=aberto");
+        RFID_Accepted();
     }
-    strID.toUpperCase();  // salva a string em uppercase
-  }
-
-  for (int i = 0; i < TAG_COUNT; i++) {
-    if (strID == tags_temp[i]) {
-      // Se a tag estiver no vetor de tags, abre a porta
-      RFID_Accepted();
-      RFID_Found = true;
-      break;
+    else{
+      //client.println("GET /logs?text=naoabre");
+      RFID_Rejected();
     }
   }
-  if (!RFID_Found) RFID_Rejected();  // senão, rejeita o cartão
+  else goto check_conn;
 
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
-}
-
-void DumpTagsFromServer() {
-  short len;
-  byte temp[4];
-  byte *buffer = NULL;
-
-  // Request HTTP
-  client.println("GET /tags HTTP/1.1");
-  client.println("Host: " + String(server));
-  client.println("Connection: close");
-  client.println();
-
-  len = client.available();  // ve quantos bytes o server respondeu
-  if (len > 0) {
-    if (len > TAG_COUNT * 5) len = TAG_COUNT * 5;
-    buffer = (byte *)calloc(len, sizeof(byte));  // buffer com no max. 225 bytes (45 tags de 4 bytes + \n)
-    client.read(buffer, len);                    // escreve os bytes no buffer
-  }
-
-  if (sizeof(buffer) == len) {
-    EEPROM.write(0, 1);  // seta o ponteiro de endereço livre para o inicio da EEPROM
-    for (int i = 0; i < len; i += 5) {
-      temp[0] = buffer[i];
-      temp[1] = buffer[i + 1];
-      temp[2] = buffer[i + 2];
-      temp[3] = buffer[i + 3];
-      writeTagInEEPROM(String((char *)temp));
-    }
-  }
-  client.stop();           // fecha conexão
-  last_update = millis();  // salva o momento da última atualização
-  EEPROMDump();            // copia as tags atualizadas da EEPROM pro buffer
-}
-
-void EEPROMDump() {
-  // le todos os 1024 endereços da eeprom, faz o parser (monta uma tag a cada 4 bytes lidos) e copia para o vetor tags_temp
-  int contador = 0;
-  String temp = "";
-  for (int j = 0; j < TAG_COUNT; j++) tags_temp[j] = "";
-
-  for (int i = 1; i <= 4 * TAG_COUNT; i++) {  // Dumpa a EEPROM em um array para evitar consultas excessivas
-    contador++;
-    temp += String(EEPROM.read(i), HEX);
-    if (contador == 4) {
-      contador = 0;
-      temp.toUpperCase();
-      tags_temp[i / 4 - 1] = temp;
-      Serial.print(temp);
-      Serial.print("  ");
-      Serial.print(i);
-      Serial.print("\n");
-      temp = "";
-    }
-  }
-  for (int i = 0; i < TAG_COUNT; i++) Serial.println(tags_temp[i]);
-}
-
-unsigned short writeTagInEEPROM(String ID) {
-  // Função para parsear a String ID em 4 bytes e escreve-os em endereços consecutivos na EEPROM
-  char temp_char[2];
-  free_address = EEPROM.read(0);  // endereço que armazena o proximo endereço livre
-
-  if (free_address == 1 + TAG_COUNT * 4) return 1;  // se o próximo endereço livre for além do limite de tags, cancela
-
-  for (int i = 0; i < 8; i += 2) {
-    temp_char[0] = ID[i];
-    temp_char[1] = ID[i + 1];
-    EEPROM.write(free_address, strtoul(temp_char, NULL, 16));
-    free_address++;
-  }
-
-  EEPROM.write(0, free_address);  // atualiza o próximo endereço livre
-  return 0;
+  //client.println("GET /logs?text=fimdeciclo");
+  wdt_reset();
+  delay(3000);
 }
 
 void RFID_Rejected() {
   // Controle do led caso a tag RFID não esteja cadastrado
 
-  if (!digitalRead(RELAY_CHECK)) resetFunc();
+  wdt_reset();
 
   // Liga o vermelho por 2.5 s
-  digitalWrite(RED, HIGH);
   digitalWrite(BLUE, LOW);
+  digitalWrite(RED, HIGH);
   digitalWrite(GREEN, LOW);
+  digitalWrite(RELAY_PIN, LOW);
+  delay(50);
+
+//  if (!digitalRead(RELAY_CHECK)) resetar();
 
   delay(2500);
+
+  wdt_reset();
 
   // Volta ao estado inicial
   digitalWrite(RED, LOW);
   digitalWrite(BLUE, HIGH);
   digitalWrite(GREEN, LOW);
+  digitalWrite(RELAY_PIN, LOW);
+  delay(200);
+
+  //if (!digitalRead(RELAY_CHECK)) resetar();
+  wdt_reset();
 }
 
 void RFID_Accepted() {
   // Controle do led caso a tag RFID esteja cadastrado
+  wdt_reset();
 
-  digitalWrite(RELAY_PIN, LOW);  // Desarma a tranca
+  digitalWrite(RELAY_PIN, HIGH);  // abre a tranca
 
   // Coloca o led em verde
+  digitalWrite(BLUE, LOW);
   digitalWrite(GREEN, HIGH);
   digitalWrite(RED, LOW);
-  digitalWrite(BLUE, LOW);
+  delay(250);
 
-  if (digitalRead(RELAY_CHECK)) resetFunc();
+  //if (digitalRead(RELAY_CHECK)) resetar();
+  wdt_reset();
 
-  delay(5000);
+  delay(4800);
 
-  digitalWrite(RELAY_PIN, HIGH);  // Arma a tranca
+  digitalWrite(RELAY_PIN, LOW);  // Fecha a tranca
 
   // Volta o led para o azul
   digitalWrite(GREEN, LOW);
   digitalWrite(RED, LOW);
   digitalWrite(BLUE, HIGH);
+  delay(250);
 
-  if (!digitalRead(RELAY_CHECK)) resetFunc();
+  //if (!digitalRead(RELAY_CHECK)) resetar();
+
+  wdt_reset();
+}
+
+void resetar() {
+  //client.println("GET /logs?text=resetando");
+  //client.println();
+
+  digitalWrite(GREEN, LOW);
+  digitalWrite(RED, LOW);
+  digitalWrite(BLUE, LOW);
+  digitalWrite(RELAY_PIN, HIGH);
+
+  resetFunc();
 }
